@@ -128,6 +128,9 @@ def main(argv: list[str] | None = None) -> None:
     -precision, --significant_digits
         Number of significant digits used when writing floating-point values.
         Set to ``0`` to preserve machine precision.
+    --coarsening-artifact, --coarsening_artifact
+        Optional ``.npz`` path where the exact fine-to-coarse mapping, activity,
+        volume, and pore-volume bookkeeping of a coarsening run is written.
     """
     start_time = time.monotonic()
     cmdargs = _parse_arguments(argv)
@@ -438,6 +441,15 @@ def _parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="Set the number of significant digits used when writing floating-point values, or 0 "
         "to use machine precision",
     )
+    parser.add_argument(
+        "--coarsening-artifact",
+        "--coarsening_artifact",
+        dest="coarsening_artifact",
+        type=str.strip,
+        default="",
+        help="Write the exact fine-to-coarse mapping and pore-volume bookkeeping of a "
+        "coarsening run to this .npz file (e.g., 'output/coarsening_artifact.npz')",
+    )
     return parser.parse_args(argv)
 
 
@@ -496,6 +508,7 @@ def _check_cmdargs(cmdargs: argparse.Namespace) -> None:
             "-d": ("grid_transformation", ""),
             "-explicit": ("write_explicit_solution", "0"),
             "-dual": ("dual_porosity_criterion", ""),
+            "--coarsening-artifact": ("coarsening_artifact", ""),
         }
         invalid_options = [
             option
@@ -676,6 +689,35 @@ def _check_cmdargs(cmdargs: argparse.Namespace) -> None:
         if cmdargs.dual_porosity_criterion:
             pycopm_error(
                 f"invalid combination, {cli_error_value('-dual')} can only be used with coarsening."
+            )
+        if cmdargs.coarsening_artifact:
+            pycopm_error(
+                f"invalid combination, {cli_error_value('--coarsening-artifact')} can only be "
+                "used with coarsening."
+            )
+    # The coarsening artifact describes a single-porosity coarse grid generated
+    # in a deck-processing stage
+    artifact = cmdargs.coarsening_artifact
+    if artifact:
+        if not artifact.endswith(".npz"):
+            pycopm_error(
+                f"invalid value {cli_error_value(f'--coarsening-artifact {artifact}')}, "
+                f"expected a path ending with {cli_correct_value('.npz')}."
+            )
+        if cmdargs.dual_porosity_criterion:
+            pycopm_error(
+                f"invalid combination, {cli_error_value('--coarsening-artifact')} cannot be "
+                f"used with {cli_error_value('-dual')}."
+            )
+        if vicinity or transformation:
+            pycopm_error(
+                f"invalid combination, {cli_error_value('--coarsening-artifact')} cannot be "
+                f"used with {cli_error_value('-v')} or {cli_error_value('-d')}."
+            )
+        if cmdargs.execution_mode in ("prep", "dry"):
+            pycopm_error(
+                f"invalid combination, {cli_error_value('--coarsening-artifact')} requires "
+                f"{cli_correct_value('-m prep_deck, deck, deck_dry, or all')}."
             )
     # Fluid-in-place correction is not supported for extracted submodels
     if vicinity and cmdargs.correct_fluid_in_place == "1":

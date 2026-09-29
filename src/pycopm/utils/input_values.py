@@ -166,6 +166,11 @@ def create_deck_config(cmdargs: argparse.Namespace) -> ConfigViaDeck:
             or cmdargs.z_coarsening
             or cmdargs.coarsening
         ),
+        coarsening_artifact=(
+            str(Path(cmdargs.coarsening_artifact).expanduser().resolve())
+            if getattr(cmdargs, "coarsening_artifact", "")
+            else ""
+        ),
     )
 
 

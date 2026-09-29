@@ -99,6 +99,38 @@ class CoarseningMaps:
     #: dual-porosity grid.
     dual_defaults: dict[str, float] = field(default_factory=dict)
 
+    #: Original-cell volumes used while coarsening properties.
+    fine_cell_volume: NDArray = field(default_factory=lambda: np.array([]))
+
+    #: Sum of the original-cell volumes of each coarse cell.
+    coarse_cluster_volume: NDArray = field(default_factory=lambda: np.array([]))
+
+    #: Original-cell lengths in the x, y, and z directions computed from the
+    #: corner coordinates.
+    fine_cell_dx: NDArray = field(default_factory=lambda: np.array([]))
+    fine_cell_dy: NDArray = field(default_factory=lambda: np.array([]))
+    fine_cell_dz: NDArray = field(default_factory=lambda: np.array([]))
+
+    #: Coarse-cell indices containing well completions.
+    well_cells: NDArray = field(default_factory=lambda: np.array([], dtype=int))
+
+    #: Permeability keywords written with COPY instead of include files.
+    compacted_permeability: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class PoreVolumeTransfers:
+    """Pore-volume transfers applied by :func:`redistribute_removed_pore_volume`.
+
+    Each row adds ``amount`` to the zero-based coarse cell ``destination``;
+    ``amount`` is ``fraction`` times the pore volume of the zero-based coarse
+    cell ``source``."""
+
+    source: NDArray = field(default_factory=lambda: np.array([], dtype=int))
+    destination: NDArray = field(default_factory=lambda: np.array([], dtype=int))
+    amount: NDArray = field(default_factory=lambda: np.array([], dtype=float))
+    fraction: NDArray = field(default_factory=lambda: np.array([], dtype=float))
+
 
 def create_coarsening_maps(
     dck: ConfigViaDeck, cmdargs: argparse.Namespace
@@ -565,6 +597,12 @@ def coarsen_properties(
         za_tot_dual = _grouped_sum(d_az * (coarsening.matrix_mask == 0), cluster_ids)
 
     total_volume = _grouped_sum(cell_volumes, cluster_ids)
+    coarsening.fine_cell_volume = cell_volumes
+    coarsening.coarse_cluster_volume = total_volume
+    coarsening.fine_cell_dx = d_x
+    coarsening.fine_cell_dy = d_y
+    coarsening.fine_cell_dz = d_z
+    coarsening.well_cells = np.asarray(wellcind, dtype=int)
     if len(dck.active_cell_methods) == 1:
         if dck.active_cell_methods[0] == "min":
             cluster_minimum = cluster_minimum_all.copy()
@@ -1241,6 +1279,7 @@ def coarsen_properties(
             "_DUAL_TMP_PYCOPM",
         )
     removed = _compact_permeability_properties(dck, permx, permy, permz, modified_deck)
+    coarsening.compacted_permeability = removed
     if "PERMY" in removed:
         generated_files.remove(f"{dck.include_prefix}PERMY.INC")
     if "PERMZ" in removed:
@@ -1477,7 +1516,7 @@ def redistribute_removed_pore_volume(
     cluster_minimum: NDArray,
     cluster_maximum: NDArray,
     removal_mask: NDArray,
-) -> None:
+) -> PoreVolumeTransfers:
     """Redistribute pore volume from removed coarse cells.
 
     Pore volume is divided among the nearest active neighbours without changing
@@ -1492,7 +1531,13 @@ def redistribute_removed_pore_volume(
     cluster_minimum, cluster_maximum
         Aggregated activity values used to identify changed clusters.
     removal_mask
-        Mask identifying retained coarse cells."""
+        Mask identifying retained coarse cells.
+
+    Returns
+    -------
+    PoreVolumeTransfers
+        The transfers added to ``output_porv``. The pore volume of the source
+        cells is not subtracted from ``output_porv``."""
     cluster_ids = np.asarray(con, dtype=int)
     pore_volumes = np.asarray(dck.original_porv, dtype=float)
     dck.output_porv = np.asarray(dck.output_porv, dtype=float)
@@ -1509,6 +1554,7 @@ def redistribute_removed_pore_volume(
     redistribution_clusters = np.union1d(changed_clusters, removed_clusters)
     maximum_distance = max(dck.output_nx, dck.output_ny, dck.output_nz)
     total_cells = dck.output_nx * dck.output_ny * dck.output_nz
+    transfers: list[tuple[int, NDArray, float, float]] = []
     for cluster_value in redistribution_clusters:
         cluster_id = int(cluster_value)
         i, j, k = _global_index_to_ijk(dck, cluster_id - 1)
@@ -1537,6 +1583,29 @@ def redistribute_removed_pore_volume(
         dck.output_porv[
             np.asarray(neighbor_indices, dtype=int)
         ] += pore_volume_increment
+        # Fancy-index += adds the increment once per distinct neighbour
+        transfers.append(
+            (
+                cluster_id - 1,
+                np.unique(np.asarray(neighbor_indices, dtype=int)),
+                pore_volume_increment,
+                1.0 / len(neighbor_indices),
+            )
+        )
+    if not transfers:
+        return PoreVolumeTransfers()
+    return PoreVolumeTransfers(
+        source=np.concatenate(
+            [np.full(dst.size, src, dtype=int) for src, dst, _, _ in transfers]
+        ),
+        destination=np.concatenate([dst for _, dst, _, _ in transfers]),
+        amount=np.concatenate(
+            [np.full(dst.size, amount) for _, dst, amount, _ in transfers]
+        ),
+        fraction=np.concatenate(
+            [np.full(dst.size, fraction) for _, dst, _, fraction in transfers]
+        ),
+    )
 
 
 def _find_active_neighbors(

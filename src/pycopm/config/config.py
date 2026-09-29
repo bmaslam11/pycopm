@@ -69,6 +69,8 @@ class ConfigViaDeck:
         Precision used when writing floating-point values.
     refinement_enabled, coarsening_enabled
         Whether the corresponding grid-modification workflow is active.
+    coarsening_artifact
+        Optional ``.npz`` path for the fine-to-coarse coarsening artifact.
     original_nx, original_ny, original_nz
         Original grid dimensions.
     output_nx, output_ny, output_nz
@@ -114,6 +116,7 @@ class ConfigViaDeck:
     # Input and working deck paths
     input_deck_path: str  # Input path without the .DATA extension
     original_deck_name: str = ""
+    coarsening_artifact: str = ""  # Optional .npz path, empty to skip the export
 
     # OPM objects loaded from the preprocessing run
     egrid_file: OpmFile = None  # Raw EGRID keyword access

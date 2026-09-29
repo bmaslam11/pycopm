@@ -26,6 +26,10 @@ from pycopm.utils.coarsening import (
     map_nnc_transmissibilities,
     redistribute_removed_pore_volume,
 )
+from pycopm.utils.coarsening_artifact import (
+    CoarseningArtifactRecord,
+    write_coarsening_artifact,
+)
 from pycopm.utils.files_writer import (
     write_dual_properties,
     write_grid,
@@ -215,6 +219,7 @@ def create_deck(dck: ConfigViaDeck, cmdargs: argparse.Namespace) -> None:
         modified_deck, wellcind = process_deck(dck, vicinity)
         pycopm_info("processing the mappings")
         cr, zc = np.array([]), np.array([])
+        artifact_record: CoarseningArtifactRecord | None = None
         if dck.grid_transformation:
             generated_files.extend(transform_properties(dck, modified_deck))
             transform_grid(dck)
@@ -238,13 +243,25 @@ def create_deck(dck: ConfigViaDeck, cmdargs: argparse.Namespace) -> None:
                 )
             )
             generated_files.extend(file_names)
+            if dck.coarsening_artifact:
+                artifact_record = CoarseningArtifactRecord(
+                    coarse_pore_volume_raw=np.array(dck.output_porv, dtype=float),
+                    coarse_actnum=np.array(dck.output_actnum),
+                    jump_removal_mask=np.array(removed_cells),
+                )
             if dck.pore_volume_correction == 1:
-                redistribute_removed_pore_volume(
+                transfers = redistribute_removed_pore_volume(
                     dck,
                     coarsening.cell_groups,
                     cluster_minimum,
                     cluster_maximum,
                     removed_cells,
+                )
+                if artifact_record is not None:
+                    artifact_record.transfers = transfers
+            if artifact_record is not None:
+                artifact_record.coarse_pore_volume_final = np.array(
+                    dck.output_porv, dtype=float
                 )
             write_porv(dck, modified_deck)
             generated_files.append(f"{dck.include_prefix}PORV.INC")
@@ -334,6 +351,19 @@ def create_deck(dck: ConfigViaDeck, cmdargs: argparse.Namespace) -> None:
                     "".join(coarsening.nnc_text),
                 )
                 generated_files.append(f"{dck.include_prefix}NNC.INC")
+        if artifact_record is not None:
+            try:
+                artifact_path = write_coarsening_artifact(
+                    dck,
+                    coarsening,
+                    artifact_record,
+                    _coarsening_options(dck, cmdargs),
+                )
+            except ValueError as error:
+                pycopm_error(str(error))
+            pycopm_info(
+                f"coarsening artifact written to {cli_info_value(str(artifact_path))}."
+            )
         generated_files.append(f"{dck.output_deck_name}.DATA")
         pycopm_success(
             "",
@@ -361,6 +391,30 @@ def create_deck(dck: ConfigViaDeck, cmdargs: argparse.Namespace) -> None:
                 str(output_directory),
                 [],
             )
+
+
+def _coarsening_options(
+    dck: ConfigViaDeck, cmdargs: argparse.Namespace
+) -> dict[str, object]:
+    """Collect the options that determine the coarsening for the artifact."""
+    return {
+        "input_deck_path": f"{dck.input_deck_path}.DATA",
+        "coarsening": cmdargs.coarsening,
+        "x_coarsening": cmdargs.x_coarsening,
+        "y_coarsening": cmdargs.y_coarsening,
+        "z_coarsening": cmdargs.z_coarsening,
+        "active_cell_methods": dck.active_cell_methods,
+        "discrete_aggregation_method": dck.discrete_aggregation_method,
+        "continuous_aggregation_method": dck.continuous_aggregation_method,
+        "pore_volume_correction": dck.pore_volume_correction,
+        "correct_fluid_in_place": dck.correct_fluid_in_place,
+        "transmissibility_coarsening_method": dck.transmissibility_coarsening_method,
+        "jump_thresholds": dck.jump_thresholds,
+        "dual_porosity_criterion": dck.dual_porosity_criterion,
+        "write_explicit_solution": dck.write_explicit_solution,
+        "significant_digits": dck.significant_digits,
+        "include_prefix": dck.include_prefix,
+    }
 
 
 def _correct_fluid_in_place(dck: ConfigViaDeck, modified_deck: list[str]) -> None:
