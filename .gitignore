@@ -1,3 +1,17 @@
+# OWN
+*.DBG
+*.EGRID
+*.ESMRY
+*.INIT
+*.PRT
+*.SMSPEC
+*.UNRST
+*.UNSMRY
+*.INC
+*.DATA
+*.pdf
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
